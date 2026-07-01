@@ -1,0 +1,90 @@
+<!-- GuiZang 自定义规则：把防火墙状态采集行落为可检索的告警(rule.id 100100) -->
+<!-- 仪表盘"设备详情页"通过 rule.id=100100 读取每台设备最近的防火墙状态。 -->
+<group name="guizang,firewall,">
+  <rule id="100100" level="3">
+    <decoded_as>guizang-firewall</decoded_as>
+    <description>GuiZang 终端防火墙状态采集</description>
+  </rule>
+</group>
+
+<!-- Windows/FIM 高危测试规则：受监控测试目录内出现/篡改文件视为模拟木马投放；删除文件作为清除信号。 -->
+<group name="guizang,guizang_trojan,">
+  <rule id="100210" level="12">
+    <if_sid>554</if_sid>
+    <field name="path">GuiZang-Sentinel-Test</field>
+    <description>高危告警(测试)：受监控目录出现可疑文件，疑似木马投放</description>
+    <group>guizang_trojan,pci_dss_11.5,</group>
+  </rule>
+  <rule id="100211" level="12">
+    <if_sid>550</if_sid>
+    <field name="path">GuiZang-Sentinel-Test</field>
+    <description>高危告警(测试)：受监控目录文件被篡改，疑似木马活动</description>
+    <group>guizang_trojan,pci_dss_11.5,</group>
+  </rule>
+  <rule id="100212" level="5">
+    <if_sid>553</if_sid>
+    <field name="path">GuiZang-Sentinel-Test</field>
+    <description>测试木马文件已被删除（处置/清除信号）</description>
+    <group>guizang_trojan_cleared,</group>
+  </rule>
+</group>
+
+<!-- Windows 威胁检测：木马/流氓软件常见落地点、可疑进程和 PowerShell 行为。 -->
+<group name="guizang,guizang_threat,">
+  <rule id="100220" level="12">
+    <if_sid>554</if_sid>
+    <field name="path">\\temp\\|\\appdata\\|start menu\\programs\\startup</field>
+    <field name="path">.exe$|.dll$|.scr$|.bat$|.cmd$|.ps1$|.vbs$|.js$|.jse$|.wsf$|.msi$</field>
+    <description>高危：木马典型投放目录(临时/AppData/启动项)出现可执行文件，疑似木马落地</description>
+    <group>guizang_threat,malware,</group>
+  </rule>
+  <rule id="100224" level="9">
+    <if_sid>554</if_sid>
+    <field name="path">\\downloads\\</field>
+    <field name="path">.exe$|.dll$|.scr$|.bat$|.cmd$|.ps1$|.vbs$|.js$|.msi$</field>
+    <description>可疑：下载目录出现可执行文件，请确认来源</description>
+    <group>guizang_threat,malware,</group>
+  </rule>
+  <rule id="100221" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.providerName">Microsoft-Windows-Sysmon</field>
+    <field name="win.system.eventID">^1$</field>
+    <field name="win.eventdata.image">\\[Tt]emp\\|\\[Dd]ownloads\\|\\[Aa]pp[Dd]ata\\</field>
+    <description>可疑进程：从临时/下载/AppData 目录启动程序，疑似木马或流氓软件运行</description>
+    <group>guizang_threat,sysmon,</group>
+  </rule>
+  <rule id="100222" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.eventdata.commandLine">-[eE]nc|[eE]ncodedCommand|FromBase64String|-[wW] [hH]idden|-[nN]op |DownloadString|Invoke-Expression| IEX</field>
+    <description>可疑 PowerShell 命令行：编码/隐藏/远程下载，疑似恶意脚本</description>
+    <group>guizang_threat,powershell,</group>
+  </rule>
+  <rule id="100223" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.providerName">Microsoft-Windows-PowerShell</field>
+    <field name="win.eventdata.scriptBlockText">FromBase64String|DownloadString|Invoke-Expression|IEX |-[eE]ncodedCommand</field>
+    <description>可疑 PowerShell 脚本块：编码/远程下载执行，疑似恶意脚本</description>
+    <group>guizang_threat,powershell,</group>
+  </rule>
+  <rule id="100225" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^4688$</field>
+    <field name="win.eventdata.newProcessName">\\[Tt]emp\\|\\[Dd]ownloads\\|\\[Aa]pp[Dd]ata\\</field>
+    <description>可疑进程：从临时/下载/AppData 目录启动程序，疑似木马或流氓软件运行</description>
+    <group>guizang_threat,process,</group>
+  </rule>
+  <rule id="100230" level="0">
+    <if_sid>92213</if_sid>
+    <field name="win.eventdata.targetFilename">__PSScriptPolicyTest_</field>
+    <description>PowerShell 执行策略临时测试文件（系统正常行为，已忽略）</description>
+    <group>guizang_noise,</group>
+  </rule>
+  <rule id="100226" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^4688$</field>
+    <field name="win.eventdata.commandLine">-[eE]nc |[eE]ncodedCommand|FromBase64String|-[wW] [hH]idden|DownloadString|Invoke-Expression| IEX </field>
+    <description>可疑命令行：编码/隐藏/远程下载，疑似恶意脚本</description>
+    <group>guizang_threat,process,</group>
+  </rule>
+</group>
+

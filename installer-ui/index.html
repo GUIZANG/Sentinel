@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sentinel 可视化一键安装</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+    body { margin: 0; background: #09111f; color: #e8eefc; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 36px 24px; }
+    .card { background: #111b2e; border: 1px solid #253553; border-radius: 18px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.28); }
+    h1 { margin: 0 0 8px; font-size: 26px; }
+    .muted { color: #93a4c4; }
+    .bar { height: 14px; background: #1b2942; border-radius: 999px; overflow: hidden; margin: 22px 0 10px; }
+    .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #38bdf8, #22c55e); transition: width .35s ease; }
+    .meta { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: #17253d; border: 1px solid #2b4269; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; }
+    .dot.done { background: #22c55e; }
+    .dot.error { background: #ef4444; }
+    pre { height: 430px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #050b14; border: 1px solid #1d2c45; border-radius: 14px; padding: 16px; line-height: 1.55; }
+    button { background: #38bdf8; color: #06101f; border: 0; border-radius: 10px; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+    .row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Sentinel 可视化一键安装</h1>
+      <div class="muted">请保持此页面打开。安装过程会配置 Docker、AI 模型、核心服务和本机 Agent。</div>
+      <div class="bar"><div id="fill" class="fill"></div></div>
+      <div class="meta">
+        <span id="status" class="status"><span id="dot" class="dot"></span><span>准备中</span></span>
+        <span id="progress" class="muted">0%</span>
+      </div>
+      <div class="row">
+        <button onclick="copyLog()">复制日志</button>
+        <button onclick="location.reload()">刷新页面</button>
+      </div>
+      <pre id="log"></pre>
+    </div>
+  </div>
+  <script>
+    const fill = document.getElementById("fill");
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+    const dotEl = document.getElementById("dot");
+    const progressEl = document.getElementById("progress");
+
+    function append(line) {
+      logEl.textContent += line + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function applyEvent(ev) {
+      if (!ev) return;
+      const pct = Number(ev.progress || 0);
+      fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      progressEl.textContent = Math.round(pct) + "%";
+      statusEl.lastChild.textContent = `${ev.step || "install"} · ${ev.message || ev.status || ""}`;
+      dotEl.className = "dot" + (ev.status === "done" ? " done" : ev.status === "error" ? " error" : "");
+    }
+
+    function copyLog() {
+      navigator.clipboard?.writeText(logEl.textContent || "");
+    }
+
+    fetch("/status").then(r => r.json()).then(s => {
+      (s.logs || []).forEach(append);
+      applyEvent(s.current_event);
+    }).catch(() => append("[!] 无法读取安装状态"));
+
+    const es = new EventSource("/events");
+    es.addEventListener("install", e => {
+      const ev = JSON.parse(e.data);
+      applyEvent(ev);
+      append(`[${ev.status}] ${ev.step}: ${ev.message}`);
+      if (ev.step === "done" || ev.status === "error") es.close();
+    });
+    es.addEventListener("log", e => append(e.data));
+  </script>
+</body>
+</html>

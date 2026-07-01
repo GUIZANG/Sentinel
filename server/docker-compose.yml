@@ -1,0 +1,175 @@
+name: sentinel
+
+# 一体化部署：Wazuh 服务器(Manager/Indexer/Dashboard) + 本系统(DB/BFF/仪表盘)
+# 所有服务在同一 docker 网络，BFF 通过服务名 wazuh.manager / wazuh.indexer 访问 Wazuh。
+#
+# 固定 IP + extra_hosts 用于兼容宿主机开启 TUN 代理时 Docker 内置 DNS 被拦截的环境。
+# host.docker.internal:host-gateway 让 Linux Docker 也能访问宿主机 Ollama/GuizangAI。
+
+x-svc-hosts: &svc_hosts
+  - "wazuh.manager:172.30.0.2"
+  - "wazuh.indexer:172.30.0.3"
+  - "db:172.30.0.4"
+  - "bff:172.30.0.5"
+  - "web:172.30.0.6"
+  - "host.docker.internal:host-gateway"
+
+services:
+  # ====================== Wazuh 服务器 ======================
+  wazuh.manager:
+    image: wazuh/wazuh-manager:4.14.5
+    hostname: wazuh.manager
+    restart: always
+    extra_hosts: *svc_hosts
+    networks:
+      sentinel_net:
+        ipv4_address: 172.30.0.2
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 655360, hard: 655360 }
+    ports:
+      - "1514:1514"     # Agent 通信
+      - "1515:1515"     # Agent 注册
+      - "514:514/udp"   # syslog
+      # Wazuh API 仅给本机健康检查/排障使用，BFF 通过容器内网访问。
+      - "127.0.0.1:55000:55000"
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=${INDEXER_PASSWORD:-SecretPassword}
+      # 本地一体化部署使用自签证书；关闭 Filebeat 校验避免证书轮换后日志无法写入 Indexer。
+      - FILEBEAT_SSL_VERIFICATION_MODE=none
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=${WAZUH_API_USER:-wazuh-wui}
+      - API_PASSWORD=${WAZUH_API_PASSWORD:-MyS3cr37P450r.*-}
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+      - ./config/wazuh_indexer_ssl_certs/root-ca-manager.pem:/etc/ssl/root-ca.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+      - ./config/wazuh_cluster/wazuh_manager.conf:/var/ossec/etc/ossec.conf:ro
+      # GuiZang 自定义解码器/规则：解析 Agent 上报的防火墙状态（设备详情页用）
+      - ./config/wazuh_rules/guizang_decoders.xml:/var/ossec/etc/decoders/guizang_decoders.xml
+      - ./config/wazuh_rules/guizang_rules.xml:/var/ossec/etc/rules/guizang_rules.xml
+      - ./config/wazuh_shared/agent.conf:/var/ossec/etc/shared/default/agent.conf
+
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.14.5
+    hostname: wazuh.indexer
+    restart: always
+    extra_hosts: *svc_hosts
+    networks:
+      sentinel_net:
+        ipv4_address: 172.30.0.3
+    ports:
+      # Indexer 不应暴露到公网；BFF 通过容器内网访问。
+      - "127.0.0.1:9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/config/certs/root-ca.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.key
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.pem
+      - ./config/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/config/certs/admin.pem
+      - ./config/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/config/certs/admin-key.pem
+      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/config/opensearch.yml
+      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml
+
+  # 说明：Wazuh 自带的后台(原 wazuh.dashboard / :8443) 已按需移除，
+  # 仅保留 GuiZang 自有仪表盘(:8080)对外。如需排错可临时加回此服务。
+
+  # ====================== 本系统 ======================
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    extra_hosts: *svc_hosts
+    networks:
+      sentinel_net:
+        ipv4_address: 172.30.0.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+    ports:
+      # 默认只绑定本机，避免数据库随仪表盘一起暴露到公网。
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - sentinel_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bff:
+    build: ../bff
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts: *svc_hosts
+    networks:
+      sentinel_net:
+        ipv4_address: 172.30.0.5
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
+      WAZUH_API_URL: https://wazuh.manager:55000
+      INDEXER_URL: https://wazuh.indexer:9200
+    depends_on:
+      db:
+        condition: service_healthy
+      wazuh.manager:
+        condition: service_started
+      wazuh.indexer:
+        condition: service_started
+
+  web:
+    build: ../frontend
+    restart: unless-stopped
+    extra_hosts: *svc_hosts
+    networks:
+      sentinel_net:
+        ipv4_address: 172.30.0.6
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      # 把已填好 IP 的 Agent 安装包对外提供下载：http://<IP>:<PORT>/download/
+      - ./agent-dist:/usr/share/nginx/html/download:ro
+    depends_on:
+      - bff
+
+networks:
+  sentinel_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  wazuh-indexer-data:
+  sentinel_pgdata:

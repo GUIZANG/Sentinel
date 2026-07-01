@@ -1,0 +1,13 @@
+<!-- GuiZang 自定义解码器：解析 Agent 上报的防火墙状态行 -->
+<!-- Agent 每隔一段时间执行采集脚本，输出形如：                         -->
+<!-- guizang_firewall enabled=on domain=on private=on public=off realtime=on platform=windows -->
+
+<decoder name="guizang-firewall">
+  <prematch>guizang_firewall </prematch>
+</decoder>
+
+<decoder name="guizang-firewall-fields">
+  <parent>guizang-firewall</parent>
+  <regex offset="after_parent">enabled=(\S+) domain=(\S+) private=(\S+) public=(\S+) realtime=(\S+) platform=(\S+)</regex>
+  <order>fw_enabled, fw_domain, fw_private, fw_public, fw_realtime, fw_platform</order>
+</decoder>
