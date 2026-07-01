@@ -8,7 +8,7 @@ import { LangProvider, useLang } from "./i18n";
 import "antd/dist/reset.css";
 import "./styles.css";
 
-// 与 styles.css 的 shadcn zinc 浅色令牌对齐，让 antd 的 Table/Tag/Button 同款观感。
+// 与 styles.css 的暖色令牌对齐，让 antd 的 Table/Tag/Button 同款观感。
 function Root() {
   const { lang } = useLang();
   return (
@@ -17,30 +17,30 @@ function Root() {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#18181b",
-          colorText: "#09090b",
-          colorTextSecondary: "#52525b",
-          colorBgContainer: "#ffffff",
-          colorBgElevated: "#ffffff",
-          colorBorder: "#e4e4e7",
-          colorBorderSecondary: "#f4f4f5",
-          borderRadius: 8,
+          colorPrimary: "#b1563f",
+          colorText: "#30251f",
+          colorTextSecondary: "#74675f",
+          colorBgContainer: "#fbf8f1",
+          colorBgElevated: "#fbf8f1",
+          colorBorder: "#dfd1be",
+          colorBorderSecondary: "#eee4d5",
+          borderRadius: 12,
           controlHeight: 36,
           fontFamily:
             '-apple-system, "PingFang SC", "Microsoft YaHei", Inter, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
         },
         components: {
           Table: {
-            headerBg: "#fafafa",
-            headerColor: "#52525b",
-            borderColor: "#f4f4f5",
-            rowHoverBg: "#f4f4f5",
+            headerBg: "#f6efe4",
+            headerColor: "#74675f",
+            borderColor: "#eee4d5",
+            rowHoverBg: "#f5eadc",
           },
           Button: { primaryShadow: "none", defaultShadow: "none" },
           Select: {
-            optionSelectedBg: "#f4f4f5",
-            optionSelectedColor: "#18181b",
-            optionActiveBg: "#fafafa",
+            optionSelectedBg: "#f5eadc",
+            optionSelectedColor: "#30251f",
+            optionActiveBg: "#fbf8f1",
           },
         },
       }}
