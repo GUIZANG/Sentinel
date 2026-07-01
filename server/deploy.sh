@@ -17,7 +17,10 @@ fi
 # 一键部署默认会把本机 Ollama/GuizangAI 也准备好；服务器已有独立模型服务时可设 ENABLE_LOCAL_GUIZANGAI=false。
 ENABLE_LOCAL_GUIZANGAI="${ENABLE_LOCAL_GUIZANGAI:-true}"
 AUTO_INSTALL_LOCAL_AGENT="${AUTO_INSTALL_LOCAL_AGENT:-true}"
-GUIZANGAI_MODEL="${GUIZANGAI_MODEL:-qwen2.5:3b}"
+GUIZANGAI_MODEL="${GUIZANGAI_MODEL:-guizangai-soc100-1.5b:q4}"
+GUIZANGAI_FALLBACK_MODEL="${GUIZANGAI_FALLBACK_MODEL:-qwen2.5:3b}"
+GUIZANGAI_LOCAL_ARCHIVE="${GUIZANGAI_LOCAL_ARCHIVE:-${ROOT_DIR}/guizangAI.gz}"
+GUIZANGAI_LOCAL_DIR="${GUIZANGAI_LOCAL_DIR:-${ROOT_DIR}/models/guizangAI}"
 GUIZANGAI_API_STYLE="${GUIZANGAI_API_STYLE:-ollama}"
 GUIZANGAI_BASE_URL="${GUIZANGAI_BASE_URL:-http://host.docker.internal:11434}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
@@ -58,6 +61,9 @@ env_value() {
 }
 
 port_available() {
+  if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; then
+    return 1
+  fi
   command -v python3 >/dev/null 2>&1 || return 0
   python3 - "$1" <<'PY'
 import socket
@@ -73,8 +79,77 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 PY
 }
 
+retry_compose_after_port_conflict() {
+  local compose_output="$1"
+  if ! echo "$compose_output" | grep -qiE 'ports are not available|bind: address already in use'; then
+    return 1
+  fi
+  if ! echo "$compose_output" | grep -q ':5432'; then
+    return 1
+  fi
+  echo
+  echo "[!] 检测到宿主机数据库端口冲突，正在自动选择新的 DB_PORT 后重试 ..."
+  DB_PORT="$(( ${DB_PORT:-$(env_value DB_PORT)} + 1 ))"
+  choose_db_port
+  echo "[*] 已将数据库宿主机端口改为 ${DB_PORT}，重新启动服务。"
+  $SUDO docker compose up -d --build
+}
+
 dashboard_healthy_on_port() {
   command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1
+}
+
+local_guizangai_artifact_exists() {
+  first_local_gguf_path >/dev/null 2>&1 || [ -f "${GUIZANGAI_LOCAL_ARCHIVE}" ]
+}
+
+first_local_gguf_path() {
+  local candidate
+  for candidate in "${GUIZANGAI_LOCAL_DIR}"/*.gguf "${GUIZANGAI_LOCAL_DIR}"/*/*.gguf; do
+    [ -f "$candidate" ] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+ensure_local_guizangai_files() {
+  local gguf
+  gguf="$(first_local_gguf_path 2>/dev/null || true)"
+  [ -n "$gguf" ] && return 0
+  [ -f "${GUIZANGAI_LOCAL_ARCHIVE}" ] || return 1
+  command -v gzip >/dev/null 2>&1 || return 1
+  command -v tar >/dev/null 2>&1 || return 1
+  mkdir -p "${GUIZANGAI_LOCAL_DIR}"
+  echo "[*] 检测到本地 GuizangAI 模型包，正在解压：${GUIZANGAI_LOCAL_ARCHIVE}"
+  gzip -dc "${GUIZANGAI_LOCAL_ARCHIVE}" | tar -xf - -C "${GUIZANGAI_LOCAL_DIR}"
+  gguf="$(first_local_gguf_path 2>/dev/null || true)"
+  if [ -n "$gguf" ]; then
+    rm -f "${GUIZANGAI_LOCAL_ARCHIVE}"
+    echo "[*] GuizangAI 模型包已解压，已删除压缩包：${GUIZANGAI_LOCAL_ARCHIVE}"
+  fi
+  [ -n "$gguf" ]
+}
+
+install_local_guizangai_model() {
+  local gguf modelfile
+  ensure_local_guizangai_files || return 1
+  gguf="$(first_local_gguf_path 2>/dev/null || true)"
+  [ -n "$gguf" ] || return 1
+  modelfile="${GUIZANGAI_LOCAL_DIR}/.Modelfile.generated"
+  cat > "$modelfile" <<EOF
+FROM ${gguf}
+
+PARAMETER temperature 0
+PARAMETER num_ctx ${GUIZANGAI_NUM_CTX:-4096}
+PARAMETER num_predict ${GUIZANGAI_MAX_NEW_TOKENS:-512}
+
+SYSTEM """你是一名企业终端安全分析与应急响应助手。你只处理防守场景：Wazuh 告警分析、漏洞处置、合规加固、告警描述润色。必须严格按照用户要求输出 JSON，不要输出 Markdown、解释文字或额外前后缀。"""
+EOF
+  echo "[*] 正在把本地 GuizangAI 模型注册到 Ollama：${GUIZANGAI_MODEL}"
+  ollama create "${GUIZANGAI_MODEL}" -f "$modelfile"
+  set_env_key GUIZANGAI_MODEL "${GUIZANGAI_MODEL}"
 }
 
 choose_web_port() {
@@ -101,9 +176,30 @@ choose_web_port() {
   exit 1
 }
 
+choose_db_port() {
+  local start="${DB_PORT:-$(env_value DB_PORT)}"
+  local port
+  start="${start:-5432}"
+  for port in $(seq "${start}" "$((start + 20))"); do
+    if port_available "${port}"; then
+      DB_PORT="${port}"
+      set_env_key DB_PORT "${DB_PORT}"
+      if [ "${DB_PORT}" != "${start}" ]; then
+        echo "[*] 数据库宿主机端口 ${start} 被占用，自动改用可用端口 ${DB_PORT}。"
+      fi
+      return 0
+    fi
+  done
+  echo "[x] 从 ${start} 到 $((start + 20)) 都没有可用数据库端口，请手动设置 DB_PORT 后重试。"
+  exit 1
+}
+
 configure_one_click_env() {
   [ -f .env ] || return 0
   if [ "${ENABLE_LOCAL_GUIZANGAI}" = "true" ]; then
+    if local_guizangai_artifact_exists; then
+      set_env_key GUIZANGAI_MODEL "${GUIZANGAI_MODEL}"
+    fi
     [ -n "$(env_value GUIZANGAI_BASE_URL)" ] || set_env_key GUIZANGAI_BASE_URL "${GUIZANGAI_BASE_URL}"
     [ -n "$(env_value GUIZANGAI_API_STYLE)" ] || set_env_key GUIZANGAI_API_STYLE "${GUIZANGAI_API_STYLE}"
     [ -n "$(env_value GUIZANGAI_MODEL)" ] || set_env_key GUIZANGAI_MODEL "${GUIZANGAI_MODEL}"
@@ -176,10 +272,27 @@ ensure_ollama_guizangai() {
   fi
 
   if ! ollama list | awk 'NR>1 {print $1}' | grep -Eq "^(${GUIZANGAI_MODEL}|${GUIZANGAI_MODEL}:latest)$"; then
+    if local_guizangai_artifact_exists; then
+      install_event "model" "running" 38 "正在安装本地 AI 模型 ${GUIZANGAI_MODEL}"
+      if install_local_guizangai_model; then
+        install_event "model" "done" 45 "本地 AI 模型 ${GUIZANGAI_MODEL} 已接入"
+        return 0
+      fi
+      echo "[!] 本地 GuizangAI 模型接入失败，尝试通过 Ollama 在线拉取。"
+    fi
     install_event "model" "running" 38 "正在拉取 AI 模型 ${GUIZANGAI_MODEL}"
     echo "[*] 未检测到 GuizangAI 模型 ${GUIZANGAI_MODEL}，正在通过 Ollama 拉取 ..."
     ollama pull "${GUIZANGAI_MODEL}" || {
-      echo "[!] 模型拉取失败。请稍后手动执行：ollama pull ${GUIZANGAI_MODEL}"
+      if [ "${GUIZANGAI_MODEL}" != "${GUIZANGAI_FALLBACK_MODEL}" ]; then
+        echo "[!] 模型 ${GUIZANGAI_MODEL} 拉取失败，自动回退到公开默认模型 ${GUIZANGAI_FALLBACK_MODEL} ..."
+        if ollama pull "${GUIZANGAI_FALLBACK_MODEL}"; then
+          GUIZANGAI_MODEL="${GUIZANGAI_FALLBACK_MODEL}"
+          set_env_key GUIZANGAI_MODEL "${GUIZANGAI_MODEL}"
+          install_event "model" "done" 45 "已回退并拉取 AI 模型 ${GUIZANGAI_MODEL}"
+          return 0
+        fi
+      fi
+      echo "[!] 模型拉取失败。请稍后手动执行：ollama pull ${GUIZANGAI_FALLBACK_MODEL}"
       install_event "model" "warning" 42 "模型拉取失败，可稍后手动拉取"
       return 0
     }
@@ -510,12 +623,13 @@ if [ ! -f .env ]; then
   echo "[*] 已从模板生成 .env，并将自动补齐一键部署所需配置。"
 fi
 choose_web_port
+choose_db_port
 configure_one_click_env
 install_event "config" "done" 29 "配置文件准备完成"
 
 WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2)"; WEB_PORT="${WEB_PORT:-8080}"
 GUIZANGAI="$(grep -E '^GUIZANGAI_BASE_URL=' .env | cut -d= -f2 || true)"
-GUIZANGAI_MODEL="$(grep -E '^GUIZANGAI_MODEL=' .env | cut -d= -f2 || true)"; GUIZANGAI_MODEL="${GUIZANGAI_MODEL:-qwen2.5:3b}"
+GUIZANGAI_MODEL="$(grep -E '^GUIZANGAI_MODEL=' .env | cut -d= -f2 || true)"; GUIZANGAI_MODEL="${GUIZANGAI_MODEL:-guizangai-soc100-1.5b:q4}"
 GUIZANGAI_API_STYLE="$(grep -E '^GUIZANGAI_API_STYLE=' .env | cut -d= -f2 || true)"; GUIZANGAI_API_STYLE="${GUIZANGAI_API_STYLE:-ollama}"
 REG_PASSWORD="$(grep -E '^AGENT_REG_PASSWORD=' .env | cut -d= -f2- || true)"
 DB_PORT="$(grep -E '^DB_PORT=' .env | cut -d= -f2)"; DB_PORT="${DB_PORT:-5432}"
@@ -707,7 +821,18 @@ install_event "agent_dist" "done" 55 "Agent 下载页生成完成"
 install_event "certs" "running" 57 "检查或生成服务证书"
 if [ ! -f config/wazuh_indexer_ssl_certs/root-ca.pem ]; then
   echo "[4/6] 生成安全证书 ..."
-  $SUDO docker compose -f generate-indexer-certs.yml run --rm generator
+  cert_output="$($SUDO docker compose -f generate-indexer-certs.yml run --rm generator 2>&1)" || {
+    echo "$cert_output"
+    if echo "$cert_output" | grep -qiE 'input/output error|meta\.db|containerd\.content'; then
+      echo
+      echo "[x] Docker Desktop 本地容器存储出现 I/O 错误。"
+      echo "    这不是 Sentinel 缺少依赖，而是 Docker 自身的镜像/元数据存储异常。"
+      echo "    请先重启 Docker Desktop，等小鲸鱼图标稳定后重新运行：./server/deploy.sh"
+      echo "    如果重启后仍失败，可在 Docker Desktop 里执行 Troubleshoot -> Clean / Purge data 后再重跑。"
+    fi
+    exit 1
+  }
+  printf '%s\n' "$cert_output"
 else
   echo "[4/6] 证书已存在，跳过生成"
 fi
@@ -716,7 +841,12 @@ install_event "certs" "done" 62 "证书准备完成"
 # ---------------------------------------------------------------- 6) 启动
 install_event "compose" "running" 64 "构建并启动核心服务"
 echo "[5/6] 构建并启动全部服务（GuiZang 引擎 + 数据库 + 后端 + 仪表盘）..."
-$SUDO docker compose up -d --build
+if compose_output="$($SUDO docker compose up -d --build 2>&1)"; then
+  printf '%s\n' "$compose_output"
+else
+  echo "$compose_output"
+  retry_compose_after_port_conflict "$compose_output" || exit 1
+fi
 install_event "compose" "done" 78 "核心服务已启动"
 
 install_event "healthcheck" "running" 80 "等待服务健康检查"

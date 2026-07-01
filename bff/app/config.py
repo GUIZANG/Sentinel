@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # 接口风格：openai（/v1/chat/completions，LM Studio/vLLM/llama.cpp/Ollama 都兼容，默认）
     #          | ollama（/api/chat）| custom_sse（现有 /chat SSE）
     guizangai_api_style: str = "openai"
-    guizangai_model: str = "qwen2.5:3b"        # 模型名；Ollama 用其底层模型标签
+    guizangai_model: str = "guizangai-soc100-1.5b:q4"  # 模型名；Ollama 用其底层模型标签
     guizangai_api_key: str = ""                # OpenAI 兼容接口如需鉴权则填（Bearer）
     guizangai_chat_path: str = ""              # 可选：自定义请求路径，覆盖该风格的默认路径
     guizangai_timeout_seconds: int = 60

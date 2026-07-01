@@ -36,6 +36,8 @@ __pycache__/
 ai-finetune/out/
 ai-finetune/dist/
 ai-finetune/vendor/
+models/
+guizangAI.gz
 *.gguf
 *.safetensors
 *.bin
@@ -46,5 +48,7 @@ server/agent-dist/
 
 # Docker / local data
 docker-data/
+server/config/wazuh_indexer_ssl_certs/*
+!server/config/wazuh_indexer_ssl_certs/.gitkeep
 *.tar
 *.tgz

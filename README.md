@@ -41,6 +41,8 @@ chmod +x deploy.sh
 
 `server/deploy.sh` 是命令行一键安装的唯一入口：会自动准备 Docker、Ollama/AI 模型、核心服务、Agent 下载页，并在本机可用时接入当前设备。若 `8080` 被占用，会自动尝试后续端口并写回 `server/.env`。
 
+部署脚本会优先接入 GuizangAI：如果存在已解压的 `models/guizangAI/` 或项目根目录的 `guizangAI.gz`，会注册为 Ollama 模型 `guizangai-soc100-1.5b:q4`；压缩包解压成功后会自动删除。没有本地模型包时才回退到公开模型。
+
 云服务器请显式传公网 IP 或域名：
 
 ```bash
