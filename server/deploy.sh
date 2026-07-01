@@ -57,6 +57,50 @@ env_value() {
   grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
+port_available() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$1" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("0.0.0.0", port))
+    except OSError:
+        sys.exit(1)
+PY
+}
+
+dashboard_healthy_on_port() {
+  command -v curl >/dev/null 2>&1 && curl -fsS --max-time 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1
+}
+
+choose_web_port() {
+  local start="${WEB_PORT:-$(env_value WEB_PORT)}"
+  local port
+  start="${start:-8080}"
+  for port in $(seq "${start}" "$((start + 20))"); do
+    if dashboard_healthy_on_port "${port}"; then
+      WEB_PORT="${port}"
+      set_env_key WEB_PORT "${WEB_PORT}"
+      echo "[*] 检测到仪表盘已在端口 ${WEB_PORT} 运行，继续复用该端口。"
+      return 0
+    fi
+    if port_available "${port}"; then
+      WEB_PORT="${port}"
+      set_env_key WEB_PORT "${WEB_PORT}"
+      if [ "${WEB_PORT}" != "${start}" ]; then
+        echo "[*] 端口 ${start} 被占用，自动改用可用端口 ${WEB_PORT}。"
+      fi
+      return 0
+    fi
+  done
+  echo "[x] 从 ${start} 到 $((start + 20)) 都没有可用端口，请手动设置 WEB_PORT 后重试。"
+  exit 1
+}
+
 configure_one_click_env() {
   [ -f .env ] || return 0
   if [ "${ENABLE_LOCAL_GUIZANGAI}" = "true" ]; then
@@ -465,6 +509,7 @@ if [ ! -f .env ]; then
   cp .env.example .env
   echo "[*] 已从模板生成 .env，并将自动补齐一键部署所需配置。"
 fi
+choose_web_port
 configure_one_click_env
 install_event "config" "done" 29 "配置文件准备完成"
 

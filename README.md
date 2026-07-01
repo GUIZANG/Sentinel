@@ -39,6 +39,8 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+`server/deploy.sh` 是命令行一键安装的唯一入口：会自动准备 Docker、Ollama/AI 模型、核心服务、Agent 下载页，并在本机可用时接入当前设备。若 `8080` 被占用，会自动尝试后续端口并写回 `server/.env`。
+
 云服务器请显式传公网 IP 或域名：
 
 ```bash
@@ -83,7 +85,6 @@ frontend/     React 仪表盘
 agent/        三平台安装、诊断、卸载脚本
 installers/   macOS pkg / Windows exe 构建脚本
 installer-ui/ 本地可视化安装页与进度服务
-scripts/      本地启动、检查、模拟脚本
 ai-finetune/  AI 数据与微调工作区
 ```
 
